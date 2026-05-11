@@ -1,9 +1,12 @@
 const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell } = require('electron');
 
-// macOS에서 transparent + alwaysOnTop 조합이 GPU 가속과 충돌해 SIGTRAP 발생.
-// app.whenReady() 이전에 비활성화 필수.
+// macOS: 서명 없는 dev Electron이 system sandbox에서 mach port 등록 실패로
+// 렌더러 프로세스가 bootstrap 못 함 (mach_port_rendezvous Permission denied).
+// no-sandbox + 추가 플래그로 우회.
 if (process.platform === 'darwin') {
-  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('no-sandbox');
+  app.commandLine.appendSwitch('disable-features', 'IOSurfaceCapturer,DesktopCaptureMacV2');
+  // 하드웨어 가속은 다시 활성화 (비활성화가 도움 안 됐고 오히려 GPU 프로세스 sandbox 문제 가능)
 }
 
 process.on('uncaughtException', (e) => {
@@ -135,6 +138,7 @@ function createPetWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: !IS_MAC,
     },
   });
 
