@@ -89,10 +89,17 @@ return theURL
 
   readForegroundBrowserUrl = function () {
     return new Promise((resolve) => {
-      execFile('osascript', ['-e', SCRIPT], { timeout: 2500 }, (err, stdout) => {
-        if (err) return resolve(null);
+      execFile('osascript', ['-e', SCRIPT], { timeout: 2500 }, (err, stdout, stderr) => {
+        if (err) {
+          console.log('[browser-url-mac] osascript error:', err.message, 'stderr:', String(stderr || '').slice(0, 200));
+          return resolve(null);
+        }
         const raw = String(stdout).trim();
-        if (!raw) return resolve(null);
+        if (!raw) {
+          const errOut = String(stderr || '').trim().slice(0, 200);
+          if (errOut) console.log('[browser-url-mac] empty url, stderr:', errOut);
+          return resolve(null);
+        }
         resolve(raw);
       });
     });
