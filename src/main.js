@@ -20,9 +20,12 @@ const THEME_PATH = path.join(THEME_DIR, 'theme.json');
 const theme = JSON.parse(fs.readFileSync(THEME_PATH, 'utf8'));
 
 // ---------- icon extraction ----------
+const IS_WIN = process.platform === 'win32';
+const IS_MAC = process.platform === 'darwin';
 const iconCache = new Map();
 
 function extractIconViaPowerShell(exePath) {
+  if (!IS_WIN) return Promise.resolve(null);
   return new Promise((resolve) => {
     const escaped = exePath.replace(/'/g, "''");
     const script = `Add-Type -AssemblyName System.Drawing; try { $icon = [System.Drawing.Icon]::ExtractAssociatedIcon('${escaped}'); if (-not $icon) { exit 1 }; $bmp = $icon.ToBitmap(); $ms = New-Object System.IO.MemoryStream; $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($ms.ToArray()); $bmp.Dispose(); $ms.Dispose(); $icon.Dispose() } catch { exit 1 }`;
@@ -71,9 +74,17 @@ function isDesktop(info) {
   if (!info) return false;
   const exe = (info.exe || '').toLowerCase();
   const title = info.title || '';
-  if (exe !== 'explorer.exe') return false;
-  if (title === '') return true;
-  if (/program\s*manager|프로그램\s*관리자/i.test(title)) return true;
+  if (IS_WIN) {
+    if (exe !== 'explorer.exe') return false;
+    if (title === '') return true;
+    if (/program\s*manager|프로그램\s*관리자/i.test(title)) return true;
+    return false;
+  }
+  if (IS_MAC) {
+    // Finder가 frontmost이면서 window title이 없으면 데스크탑 클릭으로 간주
+    if (exe.toLowerCase() !== 'finder' && exe.toLowerCase() !== 'finder.app') return false;
+    return title === '';
+  }
   return false;
 }
 
@@ -83,7 +94,8 @@ function isSelf(info) {
   const exePath = (info.exePath || '').toLowerCase();
   if (exePath && SELF_EXE_PATH && exePath === SELF_EXE_PATH) return true;
   if (exe && SELF_EXE_NAME && exe === SELF_EXE_NAME) return true;
-  if (exe === 'electron.exe') return true;
+  if (IS_WIN && exe === 'electron.exe') return true;
+  if (IS_MAC && (exe === 'electron' || exe === 'electron.app' || exe === 'cat on desk' || exe === 'cat on desk.app')) return true;
   return false;
 }
 
@@ -370,6 +382,9 @@ function startHttpServer() {
 let stopForeground = null;
 
 app.whenReady().then(() => {
+  if (IS_MAC && app.dock) {
+    try { app.dock.hide(); } catch {}
+  }
   createPetWindow();
   createTray();
   startHttpServer();
@@ -467,13 +482,34 @@ foreach ($n in $names) {
 exit 1
 `;
 
+const MAC_BRING_FRONT_SCRIPT = `
+on activateIfRunning(appName)
+  tell application "System Events"
+    if exists (processes where name is appName) then
+      tell application appName to activate
+      return true
+    end if
+  end tell
+  return false
+end activateIfRunning
+
+set candidates to {"Google Chrome", "Microsoft Edge", "Whale", "Brave Browser", "Arc", "Safari", "Firefox"}
+repeat with appName in candidates
+  if my activateIfRunning(appName as string) then return
+end repeat
+`;
+
 function bringBrowserToFront() {
-  execFile(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', BRING_FRONT_SCRIPT, 'chrome', 'msedge', 'whale', 'firefox'],
-    { timeout: 3000, windowsHide: true },
-    () => {}
-  );
+  if (IS_WIN) {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', BRING_FRONT_SCRIPT, 'chrome', 'msedge', 'whale', 'firefox'],
+      { timeout: 3000, windowsHide: true },
+      () => {}
+    );
+  } else if (IS_MAC) {
+    execFile('osascript', ['-e', MAC_BRING_FRONT_SCRIPT], { timeout: 2500 }, () => {});
+  }
 }
 
 ipcMain.on('pet:open-url', (_e, url) => {
@@ -503,7 +539,7 @@ ipcMain.on('pet:drag-begin', () => {
   const cursor = screen.getCursorScreenPoint();
   const [wx, wy] = petWindow.getPosition();
   const [w, h] = petWindow.getSize();
-  dragOrigin = { mx: cursor.x, my: cursor.y, wx, wy, w, h };
+  dragOrigin = { mx: cursor.x, my: cursor.y, wx, wy, w, h, lastMoveAt: Date.now(), lastX: cursor.x, lastY: cursor.y };
   if (dragTimer) clearInterval(dragTimer);
   dragTimer = setInterval(() => {
     if (!dragOrigin || !petWindow || petWindow.isDestroyed()) {
@@ -515,6 +551,17 @@ ipcMain.on('pet:drag-begin', () => {
       return;
     }
     const c = screen.getCursorScreenPoint();
+    // Mac fallback: 커서가 1.5초간 멈춰 있으면 drag 종료 (mouseup이 안 잡힌 케이스)
+    if (IS_MAC) {
+      if (c.x !== dragOrigin.lastX || c.y !== dragOrigin.lastY) {
+        dragOrigin.lastX = c.x;
+        dragOrigin.lastY = c.y;
+        dragOrigin.lastMoveAt = Date.now();
+      } else if (Date.now() - dragOrigin.lastMoveAt > 1500) {
+        stopDrag();
+        return;
+      }
+    }
     const dx = c.x - dragOrigin.mx;
     const dy = c.y - dragOrigin.my;
     const targetX = dragOrigin.wx + dx;

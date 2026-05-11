@@ -5,7 +5,9 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "build:win": "electron-packager . cat-on-desk --platform=win32 --arch=x64 --icon=assets/icons/icon.ico --out=dist --overwrite --ignore=^/dist --ignore=^/docs --ignore=^/.bkit-memory.json --ignore=^/assets/preview"
+    "build:win": "electron-packager . cat-on-desk --platform=win32 --arch=x64 --icon=assets/icons/icon.ico --out=dist --overwrite --ignore=^/dist --ignore=^/docs --ignore=^/.bkit-memory.json --ignore=^/assets/preview",
+    "build:mac": "electron-packager . \"Cat on Desk\" --platform=darwin --arch=arm64 --out=dist --overwrite --ignore=^/dist --ignore=^/docs --ignore=^/.bkit-memory.json --ignore=^/assets/preview",
+    "build:mac-intel": "electron-packager . \"Cat on Desk\" --platform=darwin --arch=x64 --out=dist --overwrite --ignore=^/dist --ignore=^/docs --ignore=^/.bkit-memory.json --ignore=^/assets/preview"
   },
   "author": "",
   "license": "MIT",
