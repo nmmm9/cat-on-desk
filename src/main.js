@@ -153,7 +153,11 @@ function createPetWindow() {
 
 function pushToRenderer(channel, payload) {
   if (!petWindow || petWindow.isDestroyed()) return;
-  petWindow.webContents.send(channel, payload);
+  const wc = petWindow.webContents;
+  if (!wc || wc.isDestroyed()) return;
+  // 렌더러가 아직 로딩 중이면 IPC 무시 (Mac에서 NOTREACHED 회피)
+  if (wc.isLoading()) return;
+  try { wc.send(channel, payload); } catch {}
 }
 
 function broadcastState(state, extra = {}) {
@@ -408,9 +412,18 @@ app.whenReady().then(() => {
   createTray();
   startHttpServer();
 
-  setTimeout(() => broadcastState('basic'), 200);
-
-  startStateLoop();
+  // 렌더러가 완전히 로드된 뒤에 state loop / 첫 broadcast 시작.
+  // Mac에서는 페이지 로드 전 webContents.send가 NOTREACHED를 일으킨다는 보고가 있어 명시적으로 대기.
+  const startWhenReady = () => {
+    console.log('[lifecycle] renderer ready, starting state loop');
+    broadcastState('basic');
+    startStateLoop();
+  };
+  if (petWindow.webContents.isLoading()) {
+    petWindow.webContents.once('did-finish-load', startWhenReady);
+  } else {
+    startWhenReady();
+  }
 
   stopForeground = startForegroundMonitor({
     intervalMs: 800,
