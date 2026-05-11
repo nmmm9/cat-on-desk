@@ -119,7 +119,13 @@ function createNotifyCard(payload) {
   } else {
     img.style.display = 'none';
   }
-  img.addEventListener('error', () => { img.style.display = 'none'; });
+  img.addEventListener('error', () => {
+    console.log('[renderer] notify icon load failed, src.length=', (img.src || '').length);
+    img.style.display = 'none';
+  });
+  img.addEventListener('load', () => {
+    console.log('[renderer] notify icon loaded, src.length=', (img.src || '').length);
+  });
 
   const text = document.createElement('div');
   text.className = 'text';
@@ -181,8 +187,12 @@ let currentAppIcon = '';
 let speechTimer = null;
 
 badgeIconEl.addEventListener('error', () => {
+  console.log('[renderer] badge icon load failed, src.length=', (badgeIconEl.src || '').length);
   badgeIconEl.hidden = true;
   badgeIconEl.removeAttribute('src');
+});
+badgeIconEl.addEventListener('load', () => {
+  console.log('[renderer] badge icon loaded, src.length=', (badgeIconEl.src || '').length);
 });
 
 function showBubble(text, iconUrl) {
