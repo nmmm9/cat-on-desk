@@ -6,6 +6,13 @@ if (process.platform === 'darwin') {
   app.disableHardwareAcceleration();
 }
 
+process.on('uncaughtException', (e) => {
+  console.log('[diag] uncaughtException:', e && e.stack || e);
+});
+process.on('unhandledRejection', (e) => {
+  console.log('[diag] unhandledRejection:', e && e.stack || e);
+});
+
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
@@ -131,23 +138,38 @@ function createPetWindow() {
     },
   });
 
-  // 'screen-saver' 레벨은 macOS에서 transparent 윈도우와 NOTREACHED 충돌 유발 사례가 있어 'floating' 사용
+  console.log('[diag] BrowserWindow created');
   petWindow.setAlwaysOnTop(true, IS_MAC ? 'floating' : 'screen-saver');
-  // forward 옵션은 Windows/Mac 모두 지원하지만 Mac에서 일부 버전에 충돌 보고가 있어 단순 모드로
+  console.log('[diag] setAlwaysOnTop OK');
   if (IS_MAC) {
     petWindow.setIgnoreMouseEvents(true);
   } else {
     petWindow.setIgnoreMouseEvents(true, { forward: true });
   }
-  // Mac은 데스크탑 전환/전체화면 앱 위에서도 보이게
-  if (IS_MAC && typeof petWindow.setVisibleOnAllWorkspaces === 'function') {
-    try {
-      petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    } catch {}
-  }
-  petWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  petWindow.on('closed', () => {
-    petWindow = null;
+  console.log('[diag] setIgnoreMouseEvents OK');
+  // setVisibleOnAllWorkspaces 일단 보류 (잠재 크래시 후보)
+  // if (IS_MAC && typeof petWindow.setVisibleOnAllWorkspaces === 'function') {
+  //   try { petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch {}
+  // }
+  const indexPath = path.join(__dirname, 'renderer', 'index.html');
+  console.log('[diag] loading file:', indexPath);
+  petWindow.loadFile(indexPath);
+  petWindow.on('closed', () => { petWindow = null; });
+
+  // 렌더러 / GPU 크래시 디버깅
+  petWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.log('[diag] did-fail-load', code, desc, url);
+  });
+  petWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.log('[diag] render-process-gone', JSON.stringify(details));
+  });
+  petWindow.webContents.on('did-finish-load', () => {
+    console.log('[diag] webContents did-finish-load');
+  });
+  petWindow.on('unresponsive', () => console.log('[diag] window unresponsive'));
+  petWindow.on('responsive', () => console.log('[diag] window responsive'));
+  app.on('child-process-gone', (_e, details) => {
+    console.log('[diag] child-process-gone', JSON.stringify(details));
   });
 }
 
@@ -405,12 +427,17 @@ function startHttpServer() {
 let stopForeground = null;
 
 app.whenReady().then(() => {
+  console.log('[diag] app ready, platform=', process.platform, 'electron=', process.versions.electron);
   if (IS_MAC && app.dock) {
     try { app.dock.hide(); } catch {}
+    console.log('[diag] dock hidden');
   }
   createPetWindow();
+  console.log('[diag] createPetWindow done');
   createTray();
+  console.log('[diag] createTray done');
   startHttpServer();
+  console.log('[diag] startHttpServer called');
 
   // 렌더러가 완전히 로드된 뒤에 state loop / 첫 broadcast 시작.
   // Mac에서는 페이지 로드 전 webContents.send가 NOTREACHED를 일으킨다는 보고가 있어 명시적으로 대기.
