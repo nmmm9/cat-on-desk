@@ -490,7 +490,15 @@ app.whenReady().then(() => {
         return;
       }
       const exe = (info.exe || '').toLowerCase();
-      const isBrowser = exe.includes('chrome') || exe.includes('msedge') || exe.includes('whale') || exe.includes('firefox');
+      const isBrowser =
+        exe.includes('chrome') ||
+        exe.includes('msedge') ||
+        exe.includes('edge') ||
+        exe.includes('whale') ||
+        exe.includes('firefox') ||
+        exe.includes('safari') ||
+        exe.includes('brave') ||
+        exe.includes('arc');
       let iconDataUrl = null;
       let source = '-';
       if (isBrowser) {
@@ -509,7 +517,8 @@ app.whenReady().then(() => {
         iconDataUrl = await getAppIcon(info.exePath);
         if (iconDataUrl && source === '-') source = isBrowser ? 'browser-fallback' : 'exe';
       }
-      console.log('[foreground]', { exe: info.exe, title: info.title.slice(0, 60), source });
+      const iconLen = iconDataUrl ? iconDataUrl.length : 0;
+      console.log('[foreground]', { exe: info.exe, title: info.title.slice(0, 60), source, iconLen });
       pushToRenderer('activity:foreground', { ...info, iconDataUrl });
     },
   });
