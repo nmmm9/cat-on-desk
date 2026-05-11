@@ -1,4 +1,11 @@
 const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell } = require('electron');
+
+// macOS에서 transparent + alwaysOnTop 조합이 GPU 가속과 충돌해 SIGTRAP 발생.
+// app.whenReady() 이전에 비활성화 필수.
+if (process.platform === 'darwin') {
+  app.disableHardwareAcceleration();
+}
+
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
