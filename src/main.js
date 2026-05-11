@@ -147,30 +147,44 @@ function createPetWindow() {
     petWindow.setIgnoreMouseEvents(true, { forward: true });
   }
   console.log('[diag] setIgnoreMouseEvents OK');
-  // setVisibleOnAllWorkspaces 일단 보류 (잠재 크래시 후보)
-  // if (IS_MAC && typeof petWindow.setVisibleOnAllWorkspaces === 'function') {
-  //   try { petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch {}
-  // }
-  const indexPath = path.join(__dirname, 'renderer', 'index.html');
-  console.log('[diag] loading file:', indexPath);
-  petWindow.loadFile(indexPath);
-  petWindow.on('closed', () => { petWindow = null; });
 
-  // 렌더러 / GPU 크래시 디버깅
-  petWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
-    console.log('[diag] did-fail-load', code, desc, url);
-  });
-  petWindow.webContents.on('render-process-gone', (_e, details) => {
-    console.log('[diag] render-process-gone', JSON.stringify(details));
-  });
-  petWindow.webContents.on('did-finish-load', () => {
-    console.log('[diag] webContents did-finish-load');
-  });
+  // 이벤트 리스너를 loadFile 전에 모두 등록
+  petWindow.on('closed', () => { petWindow = null; });
   petWindow.on('unresponsive', () => console.log('[diag] window unresponsive'));
   petWindow.on('responsive', () => console.log('[diag] window responsive'));
+
+  const wc = petWindow.webContents;
+  wc.on('did-start-loading', () => console.log('[diag] did-start-loading'));
+  wc.on('dom-ready', () => console.log('[diag] dom-ready'));
+  wc.on('did-finish-load', () => console.log('[diag] did-finish-load'));
+  wc.on('did-fail-load', (_e, code, desc, url) => {
+    console.log('[diag] did-fail-load code=', code, 'desc=', desc, 'url=', url);
+  });
+  wc.on('did-fail-provisional-load', (_e, code, desc, url) => {
+    console.log('[diag] did-fail-provisional-load code=', code, 'desc=', desc, 'url=', url);
+  });
+  wc.on('render-process-gone', (_e, details) => {
+    console.log('[diag] render-process-gone', JSON.stringify(details));
+  });
+  wc.on('preload-error', (_e, preloadPath, err) => {
+    console.log('[diag] preload-error', preloadPath, err && err.message || err);
+  });
+  wc.on('console-message', (_e, level, message, line, source) => {
+    console.log('[renderer console]', level, message, source + ':' + line);
+  });
   app.on('child-process-gone', (_e, details) => {
     console.log('[diag] child-process-gone', JSON.stringify(details));
   });
+  app.on('render-process-gone', (_e, _wc, details) => {
+    console.log('[diag] app.render-process-gone', JSON.stringify(details));
+  });
+
+  const indexPath = path.join(__dirname, 'renderer', 'index.html');
+  console.log('[diag] loading file:', indexPath);
+  petWindow.loadFile(indexPath).then(
+    () => console.log('[diag] loadFile resolved'),
+    (e) => console.log('[diag] loadFile rejected:', e && e.message || e)
+  );
 }
 
 function pushToRenderer(channel, payload) {
