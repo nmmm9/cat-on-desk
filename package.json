@@ -1,0 +1,36 @@
+{
+  "name": "cat-on-desk",
+  "version": "0.0.1",
+  "description": "A desktop cat pet that reacts to your local activity and active apps.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-packager . cat-on-desk --platform=win32 --arch=x64 --icon=assets/icons/icon.ico --out=dist --overwrite --ignore=^/dist --ignore=^/docs --ignore=^/.bkit-memory.json --ignore=^/assets/preview"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/packager": "^20.0.0",
+    "electron": "^32.0.0",
+    "electron-builder": "^25.1.0"
+  },
+  "dependencies": {
+    "koffi": "^2.15.2"
+  },
+  "build": {
+    "appId": "com.catondesk.app",
+    "productName": "Cat on Desk",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/icons/**/*"
+    ],
+    "win": {
+      "icon": "assets/icons/icon.ico",
+      "target": "portable",
+      "artifactName": "Cat-on-Desk-${version}.${ext}"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "default-cat",
+  "frameIntervalMs": 420,
+  "states": {
+    "basic":   { "frames": ["basic/frame-1.svg", "basic/frame-2.svg"] },
+    "laptop":  { "frames": ["laptop/frame-1.svg", "laptop/frame-2.svg"] },
+    "scratch": { "frames": ["scratch/frame-1.svg", "scratch/frame-2.svg"] },
+    "ball":    { "frames": ["ball/frame-1.svg", "ball/frame-2.svg", "ball/frame-3.svg"] },
+    "food":    { "frames": ["food/frame-1.svg", "food/frame-2.svg"] },
+    "sleep1":  { "frames": ["sleep1/frame-1.svg", "sleep1/frame-2.svg", "sleep1/frame-3.svg", "sleep1/frame-4.svg"] },
+    "sleep2":  { "frames": ["sleep2/frame-1.svg", "sleep2/frame-2.svg", "sleep2/frame-3.svg", "sleep2/frame-4.svg"] },
+    "walk":    { "frames": ["walk/frame-1.svg", "walk/frame-2.svg"] }
+  },
+  "playStates": ["scratch", "ball", "food"],
+  "sleepStates": ["sleep1", "sleep2"]
+}

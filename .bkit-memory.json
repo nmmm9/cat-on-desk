@@ -1,0 +1,23 @@
+{
+  "project": "cat-on-desk",
+  "version": "0.0.1",
+  "level": "custom-electron",
+  "currentFeature": "cat-desktop-pet",
+  "phase": "plan",
+  "features": {
+    "cat-desktop-pet": {
+      "phase": "plan",
+      "startedAt": "2026-05-08",
+      "planDoc": "docs/01-plan/features/cat-desktop-pet.plan.md",
+      "milestones": {
+        "M1_PoC": "completed",
+        "M2_Plan": "in_progress",
+        "M3_Design": "pending",
+        "M4_Characters": "pending",
+        "M5_Integration": "pending",
+        "M6_Polish": "pending",
+        "M7_Release": "pending"
+      }
+    }
+  }
+}

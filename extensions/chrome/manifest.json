@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "Cat on Desk - AI Notifier",
+  "version": "0.0.6",
+  "description": "AI 채팅 응답 완료 시 데스크톱 고양이에게 알림 전송 + 클릭 시 해당 탭 활성화",
+  "permissions": ["tabs", "alarms"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*",
+    "https://www.genspark.ai/*",
+    "https://genspark.ai/*",
+    "http://localhost:23461/*",
+    "http://127.0.0.1:23461/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://www.genspark.ai/*",
+        "https://genspark.ai/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["inject-gemini.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.genspark.ai/*", "https://genspark.ai/*"],
+      "js": ["inject-genspark.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject-chatgpt.js", "inject-claude.js", "inject-gemini.js", "inject-genspark.js"],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://www.genspark.ai/*",
+        "https://genspark.ai/*"
+      ]
+    }
+  ]
+}

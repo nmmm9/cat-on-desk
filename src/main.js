@@ -1,0 +1,586 @@
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell } = require('electron');
+const http = require('http');
+const path = require('path');
+const fs = require('fs');
+const { execFile } = require('child_process');
+const { readIdleMs, readMousePos, isLeftMouseDown } = require('./activity/input-monitor');
+const { startForegroundMonitor } = require('./activity/foreground-app');
+const { createStateMachine } = require('./state/state-machine');
+const { getSiteFavicon, getFaviconForDomain } = require('./mapping/site-favicon');
+const { getCachedBrowserUrl, urlToDomain } = require('./activity/browser-url');
+
+let petWindow = null;
+let tray = null;
+
+const SELF_EXE_PATH = (app.getPath('exe') || '').toLowerCase();
+const SELF_EXE_NAME = path.basename(SELF_EXE_PATH);
+const THEME_DIR = path.join(__dirname, 'theme', 'default-cat');
+const THEME_PATH = path.join(THEME_DIR, 'theme.json');
+
+const theme = JSON.parse(fs.readFileSync(THEME_PATH, 'utf8'));
+
+// ---------- icon extraction ----------
+const iconCache = new Map();
+
+function extractIconViaPowerShell(exePath) {
+  return new Promise((resolve) => {
+    const escaped = exePath.replace(/'/g, "''");
+    const script = `Add-Type -AssemblyName System.Drawing; try { $icon = [System.Drawing.Icon]::ExtractAssociatedIcon('${escaped}'); if (-not $icon) { exit 1 }; $bmp = $icon.ToBitmap(); $ms = New-Object System.IO.MemoryStream; $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($ms.ToArray()); $bmp.Dispose(); $ms.Dispose(); $icon.Dispose() } catch { exit 1 }`;
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { timeout: 4000, windowsHide: true },
+      (err, stdout) => {
+        if (err) return resolve(null);
+        const b64 = String(stdout).trim();
+        if (!b64 || b64.length < 200) return resolve(null);
+        resolve('data:image/png;base64,' + b64);
+      }
+    );
+  });
+}
+
+async function getAppIcon(exePath) {
+  if (!exePath) return null;
+  const key = exePath.toLowerCase();
+  if (iconCache.has(key)) return iconCache.get(key);
+
+  for (const size of ['large', 'normal', 'small']) {
+    try {
+      const icon = await app.getFileIcon(exePath, { size });
+      if (!icon || icon.isEmpty()) continue;
+      const dataUrl = icon.toDataURL();
+      if (dataUrl && dataUrl.length > 1500) {
+        iconCache.set(key, dataUrl);
+        return dataUrl;
+      }
+    } catch {}
+  }
+
+  const psDataUrl = await extractIconViaPowerShell(exePath);
+  if (psDataUrl) {
+    iconCache.set(key, psDataUrl);
+    return psDataUrl;
+  }
+
+  iconCache.set(key, null);
+  return null;
+}
+
+function isDesktop(info) {
+  if (!info) return false;
+  const exe = (info.exe || '').toLowerCase();
+  const title = info.title || '';
+  if (exe !== 'explorer.exe') return false;
+  if (title === '') return true;
+  if (/program\s*manager|프로그램\s*관리자/i.test(title)) return true;
+  return false;
+}
+
+function isSelf(info) {
+  if (!info) return false;
+  const exe = (info.exe || '').toLowerCase();
+  const exePath = (info.exePath || '').toLowerCase();
+  if (exePath && SELF_EXE_PATH && exePath === SELF_EXE_PATH) return true;
+  if (exe && SELF_EXE_NAME && exe === SELF_EXE_NAME) return true;
+  if (exe === 'electron.exe') return true;
+  return false;
+}
+
+// ---------- pet window ----------
+function createPetWindow() {
+  const display = screen.getPrimaryDisplay();
+  const { width, height } = display.workArea;
+
+  petWindow = new BrowserWindow({
+    width: 160,
+    height: 280,
+    x: width - 180,
+    y: height - 300,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    useContentSize: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  petWindow.setAlwaysOnTop(true, 'screen-saver');
+  petWindow.setIgnoreMouseEvents(true, { forward: true });
+  petWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  petWindow.on('closed', () => {
+    petWindow = null;
+  });
+}
+
+function pushToRenderer(channel, payload) {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  petWindow.webContents.send(channel, payload);
+}
+
+function broadcastState(state, extra = {}) {
+  const def = theme.states[state];
+  if (!def) return;
+  pushToRenderer('pet:state', {
+    state,
+    frames: def.frames,
+    frameIntervalMs: theme.frameIntervalMs || 400,
+    ...extra,
+  });
+}
+
+// ---------- state machine + walking ----------
+let currentWalkFacing = 1;
+
+const stateMachine = createStateMachine({
+  playStates: theme.playStates || [],
+  sleepStates: theme.sleepStates || [],
+  onChange: ({ state, phase, direction }) => {
+    console.log('[state]', state, '(' + phase + ')');
+    if (typeof direction === 'number') currentWalkFacing = direction;
+    broadcastState(state, { direction });
+  },
+});
+
+function clampToScreens(x, y, w, h) {
+  const center = { x: Math.round(x + w / 2), y: Math.round(y + h / 2) };
+  const display = screen.getDisplayNearestPoint(center);
+  const b = display.bounds;
+  return {
+    x: Math.max(b.x, Math.min(b.x + b.width - w, x)),
+    y: Math.max(b.y, Math.min(b.y + b.height - h, y)),
+  };
+}
+
+let walker = null;
+function startWalk(onComplete) {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  if (walker) return;
+
+  const [x0, y0] = petWindow.getPosition();
+  const [w, h] = petWindow.getSize();
+
+  const dir = currentWalkFacing;
+  const totalDx = (90 + Math.random() * 80) * dir;
+  const dirY = Math.random() < 0.5 ? -1 : 1;
+  const totalDy = dirY * (60 + Math.random() * 60);
+  const durationMs = 3000;
+  const startedAt = Date.now();
+
+  walker = setInterval(() => {
+    if (!petWindow || petWindow.isDestroyed()) {
+      clearInterval(walker);
+      walker = null;
+      return;
+    }
+    const t = Math.min(1, (Date.now() - startedAt) / durationMs);
+    const nxRaw = x0 + totalDx * t;
+    const nyRaw = y0 + totalDy * t;
+    const c = clampToScreens(nxRaw, nyRaw, w, h);
+    petWindow.setBounds({ x: Math.round(c.x), y: Math.round(c.y), width: w, height: h });
+    if (t >= 1) {
+      clearInterval(walker);
+      walker = null;
+      if (typeof onComplete === 'function') onComplete();
+      flushPendingNotifyResize();
+    }
+  }, 30);
+}
+
+function stopWalk() {
+  if (walker) {
+    clearInterval(walker);
+    walker = null;
+  }
+}
+
+const MOUSE_MOVE_THRESHOLD_PX = 5;
+const FRAME_ADVANCE_COOLDOWN_MS = 195;
+const KEYBOARD_COOLDOWN_MS = 40;
+
+let forcedWalkUntil = 0;
+
+let stateTickTimer = null;
+function startStateLoop() {
+  let prevWalking = false;
+  let prevIdleMs = null;
+  let prevMouse = null;
+  let lastRealInputAt = Date.now();
+  let lastFrameAdvanceAt = 0;
+
+  stateTickTimer = setInterval(() => {
+    if (Date.now() < forcedWalkUntil) return;
+    const rawIdleMs = readIdleMs();
+    if (rawIdleMs == null) return;
+    const mouse = readMousePos();
+
+    const dwAdvanced = prevIdleMs != null && rawIdleMs < prevIdleMs;
+    let mouseDist = 0;
+    if (prevMouse && mouse) {
+      mouseDist = Math.hypot(mouse.x - prevMouse.x, mouse.y - prevMouse.y);
+    }
+    prevMouse = mouse;
+    prevIdleMs = rawIdleMs;
+
+    let isRealInput = false;
+    let isKeyboardLike = false;
+    if (mouseDist >= MOUSE_MOVE_THRESHOLD_PX) {
+      isRealInput = true;
+    } else if (dwAdvanced) {
+      isRealInput = true;
+      isKeyboardLike = true;
+    }
+
+    const now = Date.now();
+    if (isRealInput) lastRealInputAt = now;
+    const effectiveIdleMs = now - lastRealInputAt;
+
+    const result = stateMachine.tick(effectiveIdleMs);
+
+    if (result.state === 'laptop' && isRealInput) {
+      const cd = isKeyboardLike ? KEYBOARD_COOLDOWN_MS : FRAME_ADVANCE_COOLDOWN_MS;
+      if (now - lastFrameAdvanceAt >= cd) {
+        lastFrameAdvanceAt = now;
+        pushToRenderer('pet:frame-advance', null);
+      }
+    }
+
+    if (result.walkActive && !prevWalking) startWalk();
+    else if (!result.walkActive && prevWalking) stopWalk();
+    prevWalking = !!result.walkActive;
+  }, 40);
+}
+
+// ---------- tray ----------
+function createTray() {
+  const iconPath = path.join(__dirname, '..', 'assets', 'icons', 'tray.png');
+  let trayImage;
+  try {
+    trayImage = nativeImage.createFromPath(iconPath);
+    if (!trayImage || trayImage.isEmpty()) trayImage = nativeImage.createEmpty();
+  } catch {
+    trayImage = nativeImage.createEmpty();
+  }
+  tray = new Tray(trayImage);
+  tray.setToolTip('Cat on Desk');
+
+  const togglePet = () => {
+    if (!petWindow || petWindow.isDestroyed()) return;
+    if (petWindow.isVisible()) petWindow.hide();
+    else petWindow.show();
+  };
+
+  const menu = Menu.buildFromTemplate([
+    { label: '펫 보이기/숨기기', click: togglePet },
+    { type: 'separator' },
+    { label: '종료', click: () => app.quit() },
+  ]);
+  tray.setContextMenu(menu);
+  tray.on('click', togglePet);
+}
+
+// ---------- HTTP server (extension events) ----------
+const HTTP_PORT = 23461;
+
+const sseClients = new Set();
+
+function broadcastSse(payload) {
+  const data = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const client of sseClients) {
+    try { client.write(data); } catch {}
+  }
+}
+
+function startHttpServer() {
+  const server = http.createServer((req, res) => {
+    const setCors = () => {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    };
+    setCors();
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      return res.end();
+    }
+    if (req.method === 'GET' && req.url === '/events') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      res.write(': connected\n\n');
+      sseClients.add(res);
+      console.log('[sse] client connected, total=', sseClients.size);
+      req.on('close', () => {
+        sseClients.delete(res);
+        console.log('[sse] client closed, total=', sseClients.size);
+      });
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/ai-response-done') {
+      const chunks = [];
+      let total = 0;
+      req.on('data', (c) => {
+        total += c.length;
+        if (total > 5000) { req.destroy(); return; }
+        chunks.push(c);
+      });
+      req.on('end', async () => {
+        let payload = {};
+        try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+        const site = (payload.site || 'AI').toString().slice(0, 30);
+        const message = (payload.message || `${site} 응답 완료`).toString().slice(0, 60);
+        const url = (payload.url || '').toString().slice(0, 500);
+        let iconDataUrl = null;
+        if (url) {
+          const domain = urlToDomain(url);
+          if (domain) iconDataUrl = await getFaviconForDomain(domain);
+        }
+        console.log('[ai-done]', site, '-', message, url ? '(' + url.slice(0, 60) + ')' : '');
+        pushToRenderer('pet:notify', { site, message, url, iconDataUrl });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{"ok":true}');
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  server.listen(HTTP_PORT, '127.0.0.1', () => {
+    console.log('[http] listening on 127.0.0.1:' + HTTP_PORT);
+  });
+  server.on('error', (e) => console.log('[http] error', e.message));
+
+  setInterval(() => {
+    for (const c of sseClients) {
+      try { c.write(': keepalive\n\n'); } catch {}
+    }
+  }, 25000);
+}
+
+// ---------- app lifecycle ----------
+let stopForeground = null;
+
+app.whenReady().then(() => {
+  createPetWindow();
+  createTray();
+  startHttpServer();
+
+  setTimeout(() => broadcastState('basic'), 200);
+
+  startStateLoop();
+
+  stopForeground = startForegroundMonitor({
+    intervalMs: 800,
+    onChange: async (info) => {
+      if (isSelf(info)) return;
+      if (isDesktop(info)) {
+        pushToRenderer('activity:foreground', { exe: '', title: '', exePath: '', iconDataUrl: null });
+        return;
+      }
+      const exe = (info.exe || '').toLowerCase();
+      const isBrowser = exe.includes('chrome') || exe.includes('msedge') || exe.includes('whale') || exe.includes('firefox');
+      let iconDataUrl = null;
+      let source = '-';
+      if (isBrowser) {
+        const url = await getCachedBrowserUrl(info.pid || 'last');
+        const domain = urlToDomain(url);
+        if (domain) {
+          iconDataUrl = await getFaviconForDomain(domain);
+          if (iconDataUrl) source = 'url:' + domain;
+        }
+        if (!iconDataUrl) {
+          iconDataUrl = await getSiteFavicon(info.title);
+          if (iconDataUrl) source = 'title-map';
+        }
+      }
+      if (!iconDataUrl) {
+        iconDataUrl = await getAppIcon(info.exePath);
+        if (iconDataUrl && source === '-') source = isBrowser ? 'browser-fallback' : 'exe';
+      }
+      console.log('[foreground]', { exe: info.exe, title: info.title.slice(0, 60), source });
+      pushToRenderer('activity:foreground', { ...info, iconDataUrl });
+    },
+  });
+});
+
+app.on('window-all-closed', (e) => {
+  e.preventDefault();
+});
+
+ipcMain.handle('app:quit', () => app.quit());
+
+const BRING_FRONT_SCRIPT = `
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public class WL {
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int n);
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int n);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr h, bool fAlt);
+  [DllImport("user32.dll", SetLastError=true)] public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, IntPtr pvParam, uint fWinIni);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr dwExtraInfo);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+}
+'@
+$SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001
+[WL]::SystemParametersInfo($SPI_SETFOREGROUNDLOCKTIMEOUT, 0, [IntPtr]::Zero, 0) | Out-Null
+
+# Alt 키 가짜 입력 → foreground lock 우회
+[WL]::keybd_event(0x12, 0, 0, [IntPtr]::Zero)
+[WL]::keybd_event(0x12, 0, 2, [IntPtr]::Zero)
+
+$names = $args
+foreach ($n in $names) {
+  $p = Get-Process | Where-Object { $_.ProcessName -eq $n -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+  if ($p) {
+    $h = $p.MainWindowHandle
+    if ([WL]::IsIconic($h)) { [WL]::ShowWindow($h, 9) | Out-Null }
+    [WL]::ShowWindow($h, 5) | Out-Null
+    $fg = [WL]::GetForegroundWindow()
+    $fgPid = 0
+    $fgT = [WL]::GetWindowThreadProcessId($fg, [ref]$fgPid)
+    $my = [WL]::GetCurrentThreadId()
+    [WL]::AttachThreadInput($my, $fgT, $true) | Out-Null
+    [WL]::BringWindowToTop($h) | Out-Null
+    [WL]::SetForegroundWindow($h) | Out-Null
+    [WL]::AttachThreadInput($my, $fgT, $false) | Out-Null
+    [WL]::SwitchToThisWindow($h, $true)
+    exit 0
+  }
+}
+exit 1
+`;
+
+function bringBrowserToFront() {
+  execFile(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-Command', BRING_FRONT_SCRIPT, 'chrome', 'msedge', 'whale', 'firefox'],
+    { timeout: 3000, windowsHide: true },
+    () => {}
+  );
+}
+
+ipcMain.on('pet:open-url', (_e, url) => {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return;
+  console.log('[click] activate', url, 'sse-clients=', sseClients.size);
+  if (petWindow && !petWindow.isDestroyed()) {
+    try { petWindow.focus(); } catch {}
+  }
+  broadcastSse({ type: 'activate-tab', url });
+  setTimeout(bringBrowserToFront, 250);
+});
+
+// ---------- drag ----------
+let dragOrigin = null;
+let dragTimer = null;
+
+function stopDrag() {
+  if (dragTimer) {
+    clearInterval(dragTimer);
+    dragTimer = null;
+  }
+  dragOrigin = null;
+}
+
+ipcMain.on('pet:drag-begin', () => {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  const cursor = screen.getCursorScreenPoint();
+  const [wx, wy] = petWindow.getPosition();
+  const [w, h] = petWindow.getSize();
+  dragOrigin = { mx: cursor.x, my: cursor.y, wx, wy, w, h };
+  if (dragTimer) clearInterval(dragTimer);
+  dragTimer = setInterval(() => {
+    if (!dragOrigin || !petWindow || petWindow.isDestroyed()) {
+      stopDrag();
+      return;
+    }
+    if (!isLeftMouseDown()) {
+      stopDrag();
+      return;
+    }
+    const c = screen.getCursorScreenPoint();
+    const dx = c.x - dragOrigin.mx;
+    const dy = c.y - dragOrigin.my;
+    const targetX = dragOrigin.wx + dx;
+    const targetY = dragOrigin.wy + dy;
+    const clamped = clampToScreens(targetX, targetY, dragOrigin.w, dragOrigin.h);
+    petWindow.setBounds({ x: clamped.x, y: clamped.y, width: dragOrigin.w, height: dragOrigin.h });
+  }, 16);
+});
+
+ipcMain.on('pet:drag-end', () => {
+  stopDrag();
+  flushPendingNotifyResize();
+});
+
+ipcMain.on('pet:set-passthrough', (_e, passthrough) => {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  petWindow.setIgnoreMouseEvents(!!passthrough, { forward: true });
+});
+
+const NOTIFY_BASE_HEIGHT = 280;
+const NOTIFY_PER_CARD_PX = 42;
+
+let pendingNotifyCount = null;
+
+function applyNotifyResize(count) {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  const n = Math.max(0, Math.min(5, Number(count) || 0));
+  const extra = Math.max(0, n - 1);
+  const newHeight = NOTIFY_BASE_HEIGHT + extra * NOTIFY_PER_CARD_PX;
+  const [x, y] = petWindow.getPosition();
+  const [w, h] = petWindow.getSize();
+  if (newHeight === h) return;
+  const bottomY = y + h;
+  const newY = bottomY - newHeight;
+  const clamped = clampToScreens(x, newY, w, newHeight);
+  petWindow.setBounds({ x: clamped.x, y: clamped.y, width: w, height: newHeight });
+}
+
+function flushPendingNotifyResize() {
+  if (pendingNotifyCount === null) return;
+  const c = pendingNotifyCount;
+  pendingNotifyCount = null;
+  applyNotifyResize(c);
+}
+
+ipcMain.on('pet:notify-resize', (_e, count) => {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  if (dragOrigin) return;
+  if (walker) {
+    pendingNotifyCount = count;
+    return;
+  }
+  applyNotifyResize(count);
+});
+
+ipcMain.on('pet:test-walk', () => {
+  stopDrag();
+  if (walker) stopWalk();
+  forcedWalkUntil = Date.now() + 5000;
+  currentWalkFacing = Math.random() < 0.5 ? -1 : 1;
+  console.log('[test] forced walk dir=', currentWalkFacing);
+  stateMachine.syncState('walk');
+  broadcastState('walk', { direction: currentWalkFacing });
+  startWalk(() => {
+    forcedWalkUntil = 0;
+    stateMachine.syncState('basic');
+    broadcastState('basic');
+  });
+});
