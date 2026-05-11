@@ -131,8 +131,20 @@ function createPetWindow() {
     },
   });
 
-  petWindow.setAlwaysOnTop(true, 'screen-saver');
-  petWindow.setIgnoreMouseEvents(true, { forward: true });
+  // 'screen-saver' 레벨은 macOS에서 transparent 윈도우와 NOTREACHED 충돌 유발 사례가 있어 'floating' 사용
+  petWindow.setAlwaysOnTop(true, IS_MAC ? 'floating' : 'screen-saver');
+  // forward 옵션은 Windows/Mac 모두 지원하지만 Mac에서 일부 버전에 충돌 보고가 있어 단순 모드로
+  if (IS_MAC) {
+    petWindow.setIgnoreMouseEvents(true);
+  } else {
+    petWindow.setIgnoreMouseEvents(true, { forward: true });
+  }
+  // Mac은 데스크탑 전환/전체화면 앱 위에서도 보이게
+  if (IS_MAC && typeof petWindow.setVisibleOnAllWorkspaces === 'function') {
+    try {
+      petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    } catch {}
+  }
   petWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   petWindow.on('closed', () => {
     petWindow = null;
@@ -585,7 +597,11 @@ ipcMain.on('pet:drag-end', () => {
 
 ipcMain.on('pet:set-passthrough', (_e, passthrough) => {
   if (!petWindow || petWindow.isDestroyed()) return;
-  petWindow.setIgnoreMouseEvents(!!passthrough, { forward: true });
+  if (IS_MAC) {
+    petWindow.setIgnoreMouseEvents(!!passthrough);
+  } else {
+    petWindow.setIgnoreMouseEvents(!!passthrough, { forward: true });
+  }
 });
 
 const NOTIFY_BASE_HEIGHT = 280;
