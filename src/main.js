@@ -60,10 +60,52 @@ function extractIconViaPowerShell(exePath) {
   });
 }
 
+function extractMacAppIconViaSips(bundlePath) {
+  if (!bundlePath) return Promise.resolve(null);
+  // .app 번들이 아니면 디렉터리 끝 자르고 다시 확인
+  let bp = bundlePath;
+  if (!bp.endsWith('.app')) {
+    // /Applications/Foo.app/Contents/MacOS/Foo 같은 실행 파일 경로 → 번들 루트 추출
+    const idx = bp.indexOf('.app/');
+    if (idx > 0) bp = bp.slice(0, idx + 4);
+    else return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    const escaped = bp.replace(/'/g, "'\\''");
+    const cmd = `
+set -e
+ICON=$(plutil -extract CFBundleIconFile raw '${escaped}/Contents/Info.plist' 2>/dev/null) || exit 1
+[ -z "$ICON" ] && exit 1
+case "$ICON" in *.icns) ;; *) ICON="$ICON.icns" ;; esac
+ICNS='${escaped}/Contents/Resources/'"$ICON"
+[ ! -f "$ICNS" ] && exit 1
+TMP=$(mktemp -t catondesk)
+sips -s format png -z 64 64 "$ICNS" --out "$TMP.png" >/dev/null 2>&1 || exit 1
+base64 < "$TMP.png" 2>/dev/null
+rm -f "$TMP" "$TMP.png"
+`;
+    execFile('/bin/bash', ['-c', cmd], { timeout: 3000 }, (err, stdout) => {
+      if (err) return resolve(null);
+      const b64 = String(stdout).trim().replace(/\s+/g, '');
+      if (!b64 || b64.length < 500) return resolve(null);
+      resolve('data:image/png;base64,' + b64);
+    });
+  });
+}
+
 async function getAppIcon(exePath) {
   if (!exePath) return null;
   const key = exePath.toLowerCase();
   if (iconCache.has(key)) return iconCache.get(key);
+
+  // Mac: .app 번들에서 .icns 직접 추출 (app.getFileIcon이 placeholder만 돌려주는 케이스 회피)
+  if (IS_MAC) {
+    const macUrl = await extractMacAppIconViaSips(exePath);
+    if (macUrl) {
+      iconCache.set(key, macUrl);
+      return macUrl;
+    }
+  }
 
   for (const size of ['large', 'normal', 'small']) {
     try {
