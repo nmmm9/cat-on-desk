@@ -44,63 +44,52 @@ try {
     });
   };
 } else if (IS_MAC) {
-  // 어떤 브라우저가 frontmost인지 먼저 알아낸 뒤, 해당 앱에 URL 질의
-  // 한 번의 osascript로 처리
-  const SCRIPT = `
-tell application "System Events"
-  set frontName to name of first application process whose frontmost is true
-end tell
-set theURL to ""
-if frontName is "Google Chrome" then
-  try
-    tell application "Google Chrome" to set theURL to URL of active tab of front window
-  end try
-else if frontName is "Google Chrome Canary" then
-  try
-    tell application "Google Chrome Canary" to set theURL to URL of active tab of front window
-  end try
-else if frontName is "Chromium" then
-  try
-    tell application "Chromium" to set theURL to URL of active tab of front window
-  end try
-else if frontName is "Brave Browser" then
-  try
-    tell application "Brave Browser" to set theURL to URL of active tab of front window
-  end try
-else if frontName is "Microsoft Edge" then
-  try
-    tell application "Microsoft Edge" to set theURL to URL of active tab of front window
-  end try
-else if frontName is "Whale" then
-  try
-    tell application "Whale" to set theURL to URL of active tab of front window
-  end try
-else if frontName is "Arc" then
-  try
-    tell application "Arc" to set theURL to URL of active tab of front window
-  end try
-else if frontName is "Safari" then
-  try
-    tell application "Safari" to set theURL to URL of current tab of front window
-  end try
-end if
-return theURL
-`;
+  // 앱별 URL 조회 스크립트. 통합 if/else 구조면 설치 안 된 앱의 tell이 컴파일 실패시켜
+  // 전체 스크립트가 syntax error로 죽음. 그래서 앱별로 분리.
+  const APP_URL_SCRIPTS = {
+    'Google Chrome': 'tell application "Google Chrome" to get URL of active tab of front window',
+    'Google Chrome Canary': 'tell application "Google Chrome Canary" to get URL of active tab of front window',
+    'Chromium': 'tell application "Chromium" to get URL of active tab of front window',
+    'Brave Browser': 'tell application "Brave Browser" to get URL of active tab of front window',
+    'Microsoft Edge': 'tell application "Microsoft Edge" to get URL of active tab of front window',
+    'Whale': 'tell application "Whale" to get URL of active tab of front window',
+    'Arc': 'tell application "Arc" to get URL of active tab of front window',
+    'Safari': 'tell application "Safari" to get URL of current tab of front window',
+  };
 
-  readForegroundBrowserUrl = function () {
+  function getFrontmostName() {
     return new Promise((resolve) => {
-      execFile('osascript', ['-e', SCRIPT], { timeout: 2500 }, (err, stdout, stderr) => {
+      execFile(
+        'osascript',
+        ['-e', 'tell application "System Events" to get name of first application process whose frontmost is true'],
+        { timeout: 1500 },
+        (err, stdout) => {
+          if (err) return resolve(null);
+          resolve(String(stdout).trim() || null);
+        }
+      );
+    });
+  }
+
+  readForegroundBrowserUrl = async function () {
+    const name = await getFrontmostName();
+    if (!name) return null;
+    const script = APP_URL_SCRIPTS[name];
+    if (!script) {
+      // 알려진 브라우저가 아님
+      return null;
+    }
+    return new Promise((resolve) => {
+      execFile('osascript', ['-e', script], { timeout: 2500 }, (err, stdout, stderr) => {
         if (err) {
-          console.log('[browser-url-mac] osascript error:', err.message, 'stderr:', String(stderr || '').slice(0, 200));
-          return resolve(null);
-        }
-        const raw = String(stdout).trim();
-        if (!raw) {
+          console.log('[browser-url-mac] tell error for', name, ':', err.message);
           const errOut = String(stderr || '').trim().slice(0, 200);
-          if (errOut) console.log('[browser-url-mac] empty url, stderr:', errOut);
+          if (errOut) console.log('[browser-url-mac] stderr:', errOut);
           return resolve(null);
         }
-        resolve(raw);
+        const url = String(stdout).trim();
+        if (!url) return resolve(null);
+        resolve(url);
       });
     });
   };
