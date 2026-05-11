@@ -141,17 +141,28 @@ function createPetWindow() {
   console.log('[diag] BrowserWindow created');
   petWindow.setAlwaysOnTop(true, IS_MAC ? 'floating' : 'screen-saver');
   console.log('[diag] setAlwaysOnTop OK');
-  if (IS_MAC) {
-    petWindow.setIgnoreMouseEvents(true);
-  } else {
+  // Mac에서는 setIgnoreMouseEvents를 ready-to-show 이후로 미룸
+  if (!IS_MAC) {
     petWindow.setIgnoreMouseEvents(true, { forward: true });
+    console.log('[diag] setIgnoreMouseEvents OK (win)');
   }
-  console.log('[diag] setIgnoreMouseEvents OK');
 
   // 이벤트 리스너를 loadFile 전에 모두 등록
   petWindow.on('closed', () => { petWindow = null; });
   petWindow.on('unresponsive', () => console.log('[diag] window unresponsive'));
   petWindow.on('responsive', () => console.log('[diag] window responsive'));
+  petWindow.on('ready-to-show', () => {
+    console.log('[diag] ready-to-show');
+    if (IS_MAC) {
+      try {
+        petWindow.setIgnoreMouseEvents(true);
+        console.log('[diag] setIgnoreMouseEvents OK (mac, deferred)');
+      } catch (e) {
+        console.log('[diag] setIgnoreMouseEvents FAIL', e && e.message || e);
+      }
+    }
+  });
+  petWindow.on('show', () => console.log('[diag] window show'));
 
   const wc = petWindow.webContents;
   wc.on('did-start-loading', () => console.log('[diag] did-start-loading'));

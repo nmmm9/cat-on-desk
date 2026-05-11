@@ -1,8 +1,17 @@
+console.log('[renderer] script start');
+window.addEventListener('error', (e) => {
+  console.log('[renderer] window error:', e.message, 'at', e.filename + ':' + e.lineno);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  console.log('[renderer] unhandled rejection:', e.reason && e.reason.message || e.reason);
+});
+
 const petEl = document.getElementById('pet');
 const catImg = document.getElementById('cat-img');
 const bubbleEl = document.getElementById('bubble');
 const badgeIconEl = document.getElementById('badge-icon');
 const badgeLabelEl = document.getElementById('badge-label');
+console.log('[renderer] DOM refs OK');
 
 const THEME_BASE = '../theme/default-cat/';
 
