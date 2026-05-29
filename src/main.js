@@ -277,13 +277,25 @@ const stateMachine = createStateMachine({
   },
 });
 
+// 윈도우 안에서 시각적으로 보이는 고양이/카드 영역의 패딩.
+// X: 윈도우 160 vs 고양이 140 → 좌우 10px가 투명. 그만큼 화면 밖으로 더 갈 수 있게.
+// Y: 윈도우 상단의 말풍선 영역(약 80px)과 하단의 카드 영역(약 35px)이 비어 있을 수 있으니
+//    그 범위만큼 윈도우가 화면 밖으로 나가도 고양이는 여전히 보임.
+const VISIBLE_INSET_X = 10;
+const VISIBLE_INSET_TOP = 80;
+const VISIBLE_INSET_BOTTOM = 35;
+
 function clampToScreens(x, y, w, h) {
   const center = { x: Math.round(x + w / 2), y: Math.round(y + h / 2) };
   const display = screen.getDisplayNearestPoint(center);
   const b = display.bounds;
+  const minX = b.x - VISIBLE_INSET_X;
+  const maxX = b.x + b.width - w + VISIBLE_INSET_X;
+  const minY = b.y - VISIBLE_INSET_TOP;
+  const maxY = b.y + b.height - h + VISIBLE_INSET_BOTTOM;
   return {
-    x: Math.max(b.x, Math.min(b.x + b.width - w, x)),
-    y: Math.max(b.y, Math.min(b.y + b.height - h, y)),
+    x: Math.max(minX, Math.min(maxX, x)),
+    y: Math.max(minY, Math.min(maxY, y)),
   };
 }
 

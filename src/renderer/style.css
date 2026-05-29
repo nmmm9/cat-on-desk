@@ -75,7 +75,7 @@ html, body {
 /* ===== 흰 말풍선 (아이콘 + 텍스트) ===== */
 .bubble {
   position: absolute;
-  bottom: calc(var(--cat-bottom) + 146px);
+  bottom: calc(var(--cat-bottom) + 120px);
   left: 50%;
   transform: translateX(-50%);
   background: #ffffff;
